@@ -79,10 +79,13 @@ x = Dropout(rate=0.5)(x)
 x = Conv2D(filters=class_number, kernel_size=(1,13), strides=1)(x)
 y_pred = BatchNormalization()(x)
 
+model = Model(inp, y_pred)
+
 max_license_palte_len = 12
 labels = Input(shape=[max_license_palte_len], dtype='float32')
 input_len = Input(shape=[1], dtype='int64')
 label_len = Input(shape=[1], dtype='int64')
 
-loss_out = Lambda(ctc_lambda_func, output_shape=(1,))([y_pred, labels, input_len, label_len])
+#y_pred = Reshape((1,x.shape[1],x.shape[2],x.shape[3]), input_shape=(x.shape[1],x.shape[2],x.shape[3]))(y_pred)
+loss_out = Lambda(ctc_lambda_func, output_shape=(1,))([labels, y_pred, input_len, label_len])
 sgd = SGD(learning_rate=0.02, decay=1e-6, momentum=0.9, nesterov=True)

@@ -11,7 +11,6 @@ import numpy as np
 import sys
 import time
 from openalpr import Alpr
-import random
 
 alpr = Alpr("us", "/home/vadim/software/openalpr/config/openalpr.conf", "/home/vadim/software/openalpr/runtime_data/")
 if not alpr.is_loaded():
@@ -22,13 +21,6 @@ alpr.set_top_n(20)
 alpr.set_default_region("md")
 
 cap = cv2.VideoCapture("/home/vadim/Desktop/video2.mp4")
-# initialize the list of class labels MobileNet SSD was trained to
-# detect, then generate a set of bounding box colors for each class
-CLASSES = ["background", "aeroplane", "bicycle", "bird", "boat",
-	"bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
-	"dog", "horse", "motorbike", "person", "pottedplant", "sheep",
-	"sofa", "train", "tvmonitor"]
-#COLORS2 = np.random.uniform(0, 255, size=(len(CLASSES), 3))
 COLORS = np.array([0,255,0,3], dtype=float)
 COLORS2 = np.array([0,215,0,50], dtype=float)
 
@@ -51,17 +43,13 @@ while(True):
                 confidence = detections[0,0,i,2]
                 if confidence>0.2:
                     box = detections[0,0,i,3:7] * np.array([w,h,w,h])
-                    #print('detections[0,0,i,3:7] -->');print(detections[0,0,i,3:7]);
-                    #print('np.array([w,h,w,h])');print(np.array([w,h,w,h]));
-                    #print('produsul lor');print(box)
                     (startX, startY, endX, endY) = box.astype("int")
                     
-                    label = "{}: {:.2f}%".format(CLASSES[idx], confidence*100)
+                    label = "{}: {:.2f}%".format('car', confidence*100)
                     cv2.rectangle(image, (startX, startY), (endX, endY), COLORS, 2)
                     y = startY-15 if startY-15>15 else startY+15
                     cv2.putText(image,label,(startX,y),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS, 2)
-                    
                     
                     if startX<0: startX = 0
                     if endX<0: endX = 0
@@ -70,15 +58,12 @@ while(True):
                     
                     img2 = image[startY:endY, startX:endX]
                     #cv2.imshow('test',img2)
-                    cv2.imwrite("img{}.jpg".format(i), img2)
+                    #cv2.imwrite("img{}.jpg".format(i), img2)
                     results = alpr.recognize_ndarray(img2)
                     if len(results['results'])>0: 
                         print("|||||||||||||||||||||||||||||||")
-                        #print(results['results'][0])
-                        print("plate--------------------->")
-                        print(results['results'][0]['candidates'][0]['plate'])
-                        print("confidence--------------------->")
-                        print(results['results'][0]['candidates'][0]['confidence'])
+                        print("plate        --> {}".format(results['results'][0]['candidates'][0]['plate']))
+                        print("confidence   --> {}".format(results['results'][0]['candidates'][0]['confidence']))
                     
                     fps = "{:3.0f} FPS".format(1/(time.time()-start_time))
                     cv2.putText(image, fps, (w-85, h-50), 
@@ -91,5 +76,3 @@ while(True):
         
 cap.release()
 cv2.destroyAllWindows()
-                    
-                    
