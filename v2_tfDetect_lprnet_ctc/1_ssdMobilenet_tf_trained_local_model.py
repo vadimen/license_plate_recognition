@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+this works in both tf v1 and v2
 Created on Sun Jan 19 21:10:03 2020
 
 @author: vadim
