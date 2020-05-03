@@ -223,7 +223,7 @@ def train(ep):
 						validation_data=valid_gen.next_batch(),
 						validation_steps=valid_gen.batch_size)
 
-train(1)
+#train(1)
 
 def save_model():
 	model_json = model.to_json()
