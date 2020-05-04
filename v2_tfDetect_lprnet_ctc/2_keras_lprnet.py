@@ -156,10 +156,10 @@ alphabet = [' ','-','0','1','2','3','4','5','6','7','8','9','A',
 #max plate len also should be common
 max_plate_len = 15
 
-train_data_dir = '/home/vadim/Desktop/plate_and_nr_dataset/train/'
+train_data_dir = 'plate_and_nr_dataset/train/'
 train_gen = TextImageGenerator(94, 24, 32, train_data_dir, alphabet, max_plate_len)
 train_gen.build_data()
-validation_data_dir = '/home/vadim/Desktop/plate_and_nr_dataset/validation/'
+validation_data_dir = 'plate_and_nr_dataset/validation/'
 valid_gen = TextImageGenerator(94, 24, 20, validation_data_dir, alphabet, max_plate_len)
 valid_gen.build_data()
 
