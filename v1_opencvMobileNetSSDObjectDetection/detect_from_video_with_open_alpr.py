@@ -20,7 +20,7 @@ if not alpr.is_loaded():
 alpr.set_top_n(20)
 alpr.set_default_region("md")
 
-cap = cv2.VideoCapture("/home/vadim/Desktop/video2.mp4")
+cap = cv2.VideoCapture("video_cars.mp4")
 COLORS = np.array([0,255,0,3], dtype=float)
 COLORS2 = np.array([0,215,0,50], dtype=float)
 

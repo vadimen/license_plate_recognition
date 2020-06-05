@@ -5,7 +5,7 @@ comments are in romanian
 """
 
 # I think $ is gonna be null label, it should be last
-alphabet = [' ', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A',
+alphabet = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A',
             'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N',
             'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '$']
 # max plate len also should be common
@@ -103,13 +103,9 @@ class BatchGenerator():
         for i in range(self.batch_size):
             img, text = self.next_sample()
             img = apply_random_effect(img, random.randint(1, 3))
-            # cv2.imshow("1", img)
             img = torch.from_numpy(img)
-            # cv2.imshow("2", img.numpy())
             img = img.type(torch.float32)
-            # cv2.imshow("3", img.numpy())
             img /= 255
-            # cv2.imshow("4", img.numpy())
             X_data[i] = img.permute(2, 0, 1)
             Y_data[i] = torch.from_numpy(np.array(text_to_labels(text) + [1] * (self.max_plate_len - len(text))))
             Y_data_len[i] = len(text)
@@ -167,11 +163,7 @@ class LPRNet(nn.Module):
             nn.ReLU(),  # *** 22 ***
         )
         self.container = nn.Sequential(
-            nn.Conv2d(in_channels=448 + self.class_num, out_channels=self.class_num, kernel_size=(1, 1), stride=(1, 1)),
-            # nn.BatchNorm2d(num_features=self.class_num),
-            # nn.ReLU(),
-            # nn.Conv2d(in_channels=self.class_num, out_channels=self.lpr_max_len+1, kernel_size=3, stride=2),
-            # nn.ReLU(),
+            nn.Conv2d(in_channels=448 + self.class_num, out_channels=self.class_num, kernel_size=(1, 1), stride=(1, 1))
         )
 
     def forward(self, x):
@@ -280,7 +272,7 @@ def train(epochs):
 
 
 def load_checkpoint():
-    checkpoint = torch.load("checkpoint-sirius-ai.tar", map_location=torch.device('cpu'))
+    checkpoint = torch.load("checkpoint-sirius-bigger-dataset-no-line.tar", map_location=torch.device('cpu'))
     lprnet.load_state_dict(checkpoint['model_state_dict'])
     opt.load_state_dict(checkpoint['optimizer_state_dict'])
     epoch = checkpoint['epoch']
@@ -304,7 +296,7 @@ def decode_batch(out):
 
 
 def test():
-    X_data, Y_data, X_data_len, Y_data_len = valid_set.next_batch()
+    X_data, Y_data, X_data_len, Y_data_len = train_set.next_batch()
     bs = X_data.shape[0]
     net_out_value = lprnet(X_data)
     net_out_value = net_out_value.permute(0, 2, 1)
@@ -312,9 +304,9 @@ def test():
     pred_texts = decode_batch(net_out_value.detach().numpy())
 
     texts = []
-    for label in Y_data:
+    for i,label in enumerate(Y_data):
         text = labels_to_text(label)
-        texts.append(text)
+        texts.append(text[0:Y_data_len[i]])
 
     for i in range(bs):
         print('Predicted: %s    True: %s' % (pred_texts[i], texts[i]))
@@ -325,87 +317,3 @@ def test():
             break
 
     cv2.destroyAllWindows()
-
-
-#sirius-ai test
-# from PIL import Image, ImageDraw, ImageFont
-#
-# def cv2ImgAddText(img, text, pos, textColor=(255, 0, 0), textSize=12):
-#     if (isinstance(img, np.ndarray)):  # detect opencv format or not
-#         img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-#     draw = ImageDraw.Draw(img)
-#     fontText = ImageFont.truetype("data/NotoSansCJK-Regular.ttc", textSize, encoding="utf-8")
-#     draw.text(pos, text, textColor, font=fontText)
-#
-#     return cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-#
-# def show(img, label, target):
-#     img = np.transpose(img, (1, 2, 0))
-#     img *= 128.
-#     img += 127.5
-#     img = img.astype(np.uint8)
-#
-#     lb = ""
-#     for i in label:
-#         lb += alphabet[i]
-#     tg = ""
-#     for j in target.tolist():
-#         tg += alphabet[int(j)]
-#
-#     flag = "F"
-#     if lb == tg:
-#         flag = "T"
-#     # img = cv2.putText(img, lb, (0,16), cv2.FONT_HERSHEY_COMPLEX_SMALL, 0.6, (0, 0, 255), 1)
-#     img = cv2ImgAddText(img, lb, (0, 0))
-#     cv2.imshow("test", img)
-#     print("target: ", tg, " ### {} ### ".format(flag), "predict: ", lb)
-#     cv2.waitKey()
-#     cv2.destroyAllWindows()
-#
-# def test():
-#     Tp = 0
-#     Tn_1 = 0
-#     Tn_2 = 0
-#     t1 = time.time()
-#     X_data, Y_data, _, _ = train_set.next_batch()
-#     bs = X_data.shape[0]
-#
-#     # forward
-#     prebs = lprnet(X_data)
-#     # greedy decode
-#     prebs = prebs.detach().numpy()
-#     preb_labels = list()
-#     for i in range(prebs.shape[0]):
-#         preb = prebs[i, :, :]
-#         preb_label = list()
-#         for j in range(preb.shape[1]):
-#             preb_label.append(np.argmax(preb[:, j], axis=0))
-#         no_repeat_blank_label = list()
-#         pre_c = preb_label[0]
-#         if pre_c != len(alphabet) - 1:
-#             no_repeat_blank_label.append(pre_c)
-#         for c in preb_label: # dropout repeate label and blank label
-#             if (pre_c == c) or (c == len(alphabet) - 1):
-#                 if c == len(alphabet) - 1:
-#                     pre_c = c
-#                 continue
-#             no_repeat_blank_label.append(c)
-#             pre_c = c
-#         preb_labels.append(no_repeat_blank_label)
-#     for i, label in enumerate(preb_labels):
-#         # show image and its predict label
-#         if True:
-#             show(X_data[i].detach().numpy(), label, Y_data[i])
-#         if len(label) != len(Y_data[i]):
-#             Tn_1 += 1
-#             continue
-#         if (np.asarray(targets[i]) == np.asarray(label)).all():
-#             Tp += 1
-#         else:
-#             Tn_2 += 1
-#     Acc = Tp * 1.0 / (Tp + Tn_1 + Tn_2)
-#     print("[Info] Test Accuracy: {} [{}:{}:{}:{}]".format(Acc, Tp, Tn_1, Tn_2, (Tp+Tn_1+Tn_2)))
-#     t2 = time.time()
-#     print("[Info] Test Speed: {}s 1/{}]".format((t2 - t1) / 50, 50))
-#
-#     cv2.destroyAllWindows()
