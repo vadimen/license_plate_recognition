@@ -5,9 +5,15 @@ comments are in romanian
 """
 
 # I think $ is gonna be null label, it should be last
-alphabet = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A',
-            'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N',
-            'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '$']
+alphabet =  ['京', '沪', '津', '渝', '冀', '晋', '蒙', '辽', '吉', '黑',
+             '苏', '浙', '皖', '闽', '赣', '鲁', '豫', '鄂', '湘', '粤',
+             '桂', '琼', '川', '贵', '云', '藏', '陕', '甘', '青', '宁',
+             '新',
+             '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+             'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K',
+             'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V',
+             'W', 'X', 'Y', 'Z', 'I', 'O', '-'
+             ]
 # max plate len also should be common
 max_plate_len = 15
 
@@ -105,7 +111,9 @@ class BatchGenerator():
             img = apply_random_effect(img, random.randint(1, 3))
             img = torch.from_numpy(img)
             img = img.type(torch.float32)
-            img /= 255
+            #img /= 255
+            img -= 127.5
+            img *= 0.0078125#limiteaza valori intre -0.9..0.9
             X_data[i] = img.permute(2, 0, 1)
             Y_data[i] = torch.from_numpy(np.array(text_to_labels(text) + [1] * (self.max_plate_len - len(text))))
             Y_data_len[i] = len(text)
@@ -198,7 +206,7 @@ valid_set = BatchGenerator(valid_dir, 94, 24, alphabet, max_plate_len, 32)
 
 T = 18  # input sequence length
 
-lprnet = LPRNet(class_num=len(alphabet) + 1, lpr_max_len=max_plate_len)
+lprnet = LPRNet(class_num=len(alphabet), lpr_max_len=max_plate_len)
 lprnet.to(dev)
 
 
@@ -240,7 +248,7 @@ print("initial net weights successful!")
 
 opt = optim.RMSprop(lprnet.parameters(), lr=0.1, alpha=0.9, eps=1e-08,
                     momentum=0.9, weight_decay=2e-5)
-ctc_loss = nn.CTCLoss(blank=alphabet.index('$'), reduction='mean')
+#ctc_loss = nn.CTCLoss(blank=alphabet.index('$'), reduction='mean')
 
 
 def train(epochs):
@@ -280,6 +288,13 @@ def load_checkpoint():
     print("epoch nr ={}, last loss = {}".format(epoch, loss))
     lprnet.eval()
 
+def load_model():
+    wghts = torch.load('Final_LPRNet_model.pth', map_location=torch.device('cpu'))
+    lprnet.load_state_dict(wghts)
+    print('pretrained model was loader')
+    lprnet.eval()
+
+load_model()
 
 # TESTING
 import itertools
