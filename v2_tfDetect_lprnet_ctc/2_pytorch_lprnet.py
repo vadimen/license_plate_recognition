@@ -1,10 +1,21 @@
 """
 @author Vadim Placinta
 
-comments are in romanian
+taken parts from:
+https://github.com/sirius-ai/LPRNet_Pytorch
+https://github.com/DeepSystems/supervisely-tutorials/blob/master/anpr_ocr/src/image_ocr.ipynb
 """
+import pandas as pd
+import torch
+import torch.nn as nn
+from torch import optim
+import cv2
+import random
+import numpy as np
+import time
+from torch.autograd import Variable
 
-# I think $ is gonna be null label, it should be last
+# I think '-' is gonna be null label, it should be last
 alphabet =  ['京', '沪', '津', '渝', '冀', '晋', '蒙', '辽', '吉', '黑',
              '苏', '浙', '皖', '闽', '赣', '鲁', '豫', '鄂', '湘', '粤',
              '桂', '琼', '川', '贵', '云', '藏', '陕', '甘', '青', '宁',
@@ -18,27 +29,14 @@ alphabet =  ['京', '沪', '津', '渝', '冀', '晋', '蒙', '辽', '吉', '黑
 max_plate_len = 15
 
 # partea pt incarcarea datelor
-import pandas as pd
-import torch
-import torch.nn as nn
-from torch import optim
-import cv2
-import random
-import numpy as np
-import time
-from torch.autograd import Variable
-
-dev = torch.device(
+device = torch.device(
     "cuda") if torch.cuda.is_available() else torch.device("cpu")
-
 
 def labels_to_text(labels):
     return ''.join(list(map(lambda x: alphabet[int(x)], labels)))
 
-
 def text_to_labels(text):
     return list(map(lambda x: alphabet.index(x), text))
-
 
 def apply_random_effect(img, eff):
     shape = (img.shape[1], img.shape[0])
@@ -54,7 +52,6 @@ def apply_random_effect(img, eff):
         return cv2.addWeighted(img, alpha, dirt, (1.0 - alpha), 0.0)
     else:  # apply blur
         return cv2.blur(img, (random.randint(1, 2), random.randint(1, 2)))  # every param in range 1:4
-
 
 class BatchGenerator():
     def __init__(self, dir, img_w, img_h, alphabet, max_plate_len, batch_size, shuffle=False):
@@ -84,7 +81,7 @@ class BatchGenerator():
         for i, t in enumerate(plt_text):
             self.texts.append(t)
 
-        self.indexes = torch.randperm(self.nr_sampels)
+        self.indexes = range(self.nr_sampels)#torch.randperm(self.nr_sampels)
         self.cnt = 0
 
     def next_sample(self):
@@ -97,14 +94,11 @@ class BatchGenerator():
 
     def next_batch(self):
         global T
-        X_data = torch.zeros((self.batch_size, 3, self.img_h, self.img_w)).to(dev)
-        Y_data = torch.zeros((self.batch_size, self.max_plate_len), dtype=torch.long).to(dev)
+        X_data = torch.zeros((self.batch_size, 3, self.img_h, self.img_w)).to(device)
+        Y_data = torch.zeros((self.batch_size, self.max_plate_len), dtype=torch.long).to(device)
         # nr de timestamp care ies din nn, e nevoie pentru ctc_loss
         X_data_len = torch.ones(self.batch_size, dtype=torch.long) * T
         Y_data_len = torch.zeros(self.batch_size, dtype=torch.long)
-
-        X_data_len.to(dev)
-        Y_data_len.to(dev)
 
         for i in range(self.batch_size):
             img, text = self.next_sample()
@@ -119,7 +113,6 @@ class BatchGenerator():
             Y_data_len[i] = len(text)
 
         return X_data, Y_data, X_data_len, Y_data_len
-
 
 # partea unde construiesc reteaua
 class small_basic_block(nn.Module):
@@ -137,7 +130,6 @@ class small_basic_block(nn.Module):
 
     def forward(self, x):
         return self.block(x)
-
 
 class LPRNet(nn.Module):
     def __init__(self, lpr_max_len, class_num, dropout_rate=0.5, phase=True):
@@ -198,7 +190,6 @@ class LPRNet(nn.Module):
 
         return logits
 
-
 train_dir = 'plate_and_nr_dataset/train/'
 valid_dir = 'plate_and_nr_dataset/validation/'
 train_set = BatchGenerator(train_dir, 94, 24, alphabet, max_plate_len, 32, shuffle=True)
@@ -207,8 +198,6 @@ valid_set = BatchGenerator(valid_dir, 94, 24, alphabet, max_plate_len, 32)
 T = 18  # input sequence length
 
 lprnet = LPRNet(class_num=len(alphabet), lpr_max_len=max_plate_len)
-lprnet.to(dev)
-
 
 def adjust_learning_rate(optimizer, cur_epoch, base_lr, lr_schedule):
     """
@@ -226,10 +215,8 @@ def adjust_learning_rate(optimizer, cur_epoch, base_lr, lr_schedule):
 
     return lr
 
-
 def xavier(param):
     nn.init.xavier_uniform(param)
-
 
 def weights_init(m):
     for key in m.state_dict():
@@ -241,63 +228,120 @@ def weights_init(m):
         elif key.split('.')[-1] == 'bias':
             m.state_dict()[key][...] = 0.01
 
+def train_one_epoch(model, log_interval, epoch, loader, optimizer, device):
+    model.to(device)
+    model.train()
+    N_count = 0
+    losses = []
+    start = time.time()
+    for i in range(loader.nr_sampels//loader.batch_size+1):
+        X_data, Y_data, X_data_len, Y_data_len = loader.next_batch()
+        N_count += X_data.size(0)
+        adjust_learning_rate(optimizer, epoch, 0.1, [4, 8, 12, 14, 16])
 
-lprnet.backbone.apply(weights_init)
-lprnet.container.apply(weights_init)
-print("initial net weights successful!")
-
-opt = optim.RMSprop(lprnet.parameters(), lr=0.1, alpha=0.9, eps=1e-08,
-                    momentum=0.9, weight_decay=2e-5)
-#ctc_loss = nn.CTCLoss(blank=alphabet.index('$'), reduction='mean')
-
-
-def train(epochs):
-    for i in range(epochs):
-        start = time.time()
-
-        X_data, Y_data, X_data_len, Y_data_len = train_set.next_batch()
-        lr = adjust_learning_rate(opt, i, 0.1, [4, 8, 12, 14, 16])
-
-        logits = lprnet(X_data)
+        logits = model(X_data)
         log_probs = logits.permute(2, 0, 1)  # for ctc loss: T x N x C
         log_probs = log_probs.log_softmax(2).requires_grad_()
-        opt.zero_grad()
+        optimizer.zero_grad()
         loss = ctc_loss(log_probs, Y_data, X_data_len, Y_data_len)
         if loss.item() == np.inf:
             continue
+        losses.append(loss.item())
         loss.backward()
-        opt.step()
-        print("epoch:", i, "loss:", loss.item())
-        print((1 / (time.time() - start)), "FPS")
+        optimizer.step()
 
-        if i % 1000 == 0:
-            torch.save({
-                'epoch': i,
-                'model_state_dict': lprnet.state_dict(),
-                'optimizer_state_dict': opt.state_dict(),
-                'loss': loss.item()
-            }, "checkpoint.tar")
+        if (i+1) % log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss {:.6f}'.format(
+                epoch+1, N_count, loader.nr_sampels, (N_count/loader.nr_sampels) * 100.0,
+                loss.item()
+            ))
 
+    print("{:.2f}s time taken to train for epoch {}".format(time.time() - start, epoch+1))
+    torch.save({
+        'epoch': epoch+1,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': np.mean(losses)
+    }, "lprnet_chckpnt_epoch_{}.tar".format(epoch+1))
+    print("lprnet_chckpnt_epoch_{}.tar successfully saved".format(epoch+1))
 
-def load_checkpoint():
-    checkpoint = torch.load("checkpoint-sirius-bigger-dataset-no-line.tar", map_location=torch.device('cpu'))
+    return np.mean(losses)
+
+def validation_one_epoch(model, epoch, loader, device):
+    model.to(device)
+    model.eval()
+
+    losses = []
+    with torch.no_grad():
+        for i in range(loader.nr_sampels // loader.batch_size + 1):
+            X_data, Y_data, X_data_len, Y_data_len = loader.next_batch()
+
+            logits = model(X_data)
+            log_probs = logits.permute(2, 0, 1)  # for ctc loss: T x N x C
+            log_probs = log_probs.log_softmax(2).requires_grad_()
+            loss = ctc_loss(log_probs, Y_data, X_data_len, Y_data_len)
+            if loss.item() == np.inf:
+                continue
+            losses.append(loss.item())
+
+    print("Validation epoch:", epoch+1, ", loss:", np.mean(losses))
+    return np.mean(losses)
+
+optimizer = optim.RMSprop(lprnet.parameters(), lr=0.001, alpha=0.9, eps=1e-08,
+                    momentum=0.9, weight_decay=2e-5)
+ctc_loss = nn.CTCLoss(blank=alphabet.index('-'), reduction='mean')
+
+train_losses = []
+validation_losses = []
+def train(epochs):
+    log_interval = 2
+    load_or_init(False)
+    for epoch in range(epochs):
+        tl = train_one_epoch(lprnet, log_interval, epoch, train_set, optimizer, device)
+        vl = validation_one_epoch(lprnet, epoch, valid_set, device)
+        train_losses.append(tl)
+        validation_losses.append(vl)
+
+def load_or_init(v=True):
+    if v is True:
+        lprnet.backbone.apply(weights_init)
+        lprnet.container.apply(weights_init)
+        print("initialized net weights successful!")
+    else:
+        wghts = torch.load('Final_LPRNet_model_by_sirius.pth', map_location=torch.device('cpu'))
+        lprnet.load_state_dict(wghts)
+        print('custom pretrained model was loaded')
+    lprnet.eval()
+
+def load_checkpoint(ep):
+    checkpoint = torch.load("checkpoint_epoch_{}.tar".format(ep), map_location=torch.device('cpu'))
     lprnet.load_state_dict(checkpoint['model_state_dict'])
-    opt.load_state_dict(checkpoint['optimizer_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     epoch = checkpoint['epoch']
     loss = checkpoint['loss']
     print("epoch nr ={}, last loss = {}".format(epoch, loss))
     lprnet.eval()
 
-def load_model():
-    wghts = torch.load('Final_LPRNet_model.pth', map_location=torch.device('cpu'))
-    lprnet.load_state_dict(wghts)
-    print('pretrained model was loader')
-    lprnet.eval()
-
-load_model()
-
 # TESTING
 import itertools
+
+#calculates min edit distance in nr of replace, add, edit operation
+def min_distance(word1, word2):
+    rows = len(word1) + 1
+    cols = len(word2) + 1
+    arr = np.zeros((rows, cols), dtype=np.uint8)
+    arr[0] = range(cols)
+    arr[:, 0] = range(rows)
+
+    for i in range(1, rows):
+        for j in range(1, cols):
+            if word1[i - 1] == word2[j - 1]:
+                arr[i, j] = arr[i - 1, j - 1]
+            else:
+                m = min(arr[i - 1, j - 1], arr[i, j - 1], arr[i - 1, j])
+                arr[i, j] = m + 1
+
+    return arr[rows - 1][cols - 1]
 
 def decode_batch(out):
     ret = []
@@ -305,10 +349,11 @@ def decode_batch(out):
     for i in range(bs):
         out_best = list(np.argmax(out[i, :], 1))
         out_best = [k for k, _ in itertools.groupby(out_best)]
-        st = ''.join(list(map(lambda x: alphabet[int(x)] if int(x) < len(alphabet) - 1 else '', out_best)))
+        st = ''.join(list(map(
+                lambda x: alphabet[int(x)] if int(x) in range(alphabet.index('新'),alphabet.index('-')) else '',
+                out_best)))
         ret.append(st)
     return ret
-
 
 def test():
     X_data, Y_data, X_data_len, Y_data_len = train_set.next_batch()
@@ -323,12 +368,22 @@ def test():
         text = labels_to_text(label)
         texts.append(text[0:Y_data_len[i]])
 
+    label_errors = []
     for i in range(bs):
         print('Predicted: %s    True: %s' % (pred_texts[i], texts[i]))
-        img = X_data[i].permute(1,2,0).detach().numpy()
-        cv2.imshow('img', img)
+        label_errors.append(min_distance(pred_texts[i], texts[i]))
+        #img = X_data[i].permute(1,2,0).detach().numpy()
+        #cv2.imshow('img', img)
 
-        if cv2.waitKey(0) & 0xFF == ord('q'):
-            break
+        #if cv2.waitKey(0) & 0xFF == ord('q'):
+        #    break
 
-    cv2.destroyAllWindows()
+    #cv2.destroyAllWindows()
+    return np.mean(label_errors)
+
+def test_validation_dataset():
+    load_or_init(False)
+    errs = []
+    for i in range(10):
+        errs.append(test())
+    print(np.mean(errs))
