@@ -189,89 +189,122 @@ class BatchGenerator():
         return X_data, Y_data, X_data_len, Y_data_len
 
 # partea unde construim reteaua
-class Softmax(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        #se aplica pt torch.Size([1, 30, 1, 74])
-        return torch.nn.functional.log_softmax(x, 3)
-
-class Reshape(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        # se aplica pt torch.Size([1, 30, 1, 74]) --> 30 nu mai e 30, am schimbat alfabet
-        #pentru CTCloss
-        #trebuie sa fie (T,N,C) , where T=input length, N=batch size, C=number of classes
-        x = x.permute(3, 0, 1, 2)
-        return x.view(x.shape[0], x.shape[1], x.shape[2])
-
-def init_weights(m):
-    if type(m) == nn.Conv2d:
-        torch.nn.init.xavier_uniform_(m.weight)
-        #m.bias.data.fill_(0.01)
 
 class small_basic_block(nn.Module):
     def __init__(self, ch_in, ch_out):
-        super().__init__()
+        super(small_basic_block, self).__init__()
         self.block = nn.Sequential(
-            nn.Conv2d(ch_in, ch_out//4, kernel_size=1),
+            nn.Conv2d(ch_in, ch_out // 4, kernel_size=1),
             nn.ReLU(),
-            nn.Conv2d(ch_out//4, ch_out//4, kernel_size=(3,1), padding=(1,0)),
+            nn.Conv2d(ch_out // 4, ch_out // 4, kernel_size=(3, 1), padding=(1, 0)),
             nn.ReLU(),
-            nn.Conv2d(ch_out//4, ch_out//4, kernel_size=(1,3), padding=(0,1)),
-            nn.Conv2d(ch_out//4, ch_out, kernel_size=1)
+            nn.Conv2d(ch_out // 4, ch_out // 4, kernel_size=(1, 3), padding=(0, 1)),
+            nn.ReLU(),
+            nn.Conv2d(ch_out // 4, ch_out, kernel_size=1),
         )
-        self.block.apply(init_weights)
 
     def forward(self, x):
         return self.block(x)
 
 class LPRNet(nn.Module):
-    def __init__(self, class_num):
-        super().__init__()
-        self.lprnet = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=3, stride=1),
+    def __init__(self, lpr_max_len, class_num, dropout_rate=0.5, phase=True):
+        super(LPRNet, self).__init__()
+        self.phase = phase
+        self.lpr_max_len = lpr_max_len
+        self.class_num = class_num
+        self.backbone = nn.Sequential(
+            nn.Conv2d(in_channels=3, out_channels=64, kernel_size=3, stride=1),  # 0
             nn.BatchNorm2d(num_features=64),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=3, stride=1),
-            small_basic_block(ch_in=64, ch_out=128),
+            nn.ReLU(),  # 2
+            nn.MaxPool3d(kernel_size=(1, 3, 3), stride=(1, 1, 1)),
+            small_basic_block(ch_in=64, ch_out=128),  # *** 4 ***
             nn.BatchNorm2d(num_features=128),
-            nn.ReLU(),
-            nn.MaxPool3d(kernel_size=(1, 3, 3), stride=(2, 2, 1)),
-            small_basic_block(ch_in=64, ch_out=256),
+            nn.ReLU(),  # 6
+            nn.MaxPool3d(kernel_size=(1, 3, 3), stride=(2, 1, 2)),
+            small_basic_block(ch_in=64, ch_out=256),  # 8
             nn.BatchNorm2d(num_features=256),
+            nn.ReLU(),  # 10
+            small_basic_block(ch_in=256, ch_out=256),  # *** 11 ***
+            nn.BatchNorm2d(num_features=256),  # 12
             nn.ReLU(),
-            small_basic_block(ch_in=256, ch_out=256),
+            nn.MaxPool3d(kernel_size=(1, 3, 3), stride=(4, 1, 2)),  # 14
+            nn.Dropout(dropout_rate),
+            nn.Conv2d(in_channels=64, out_channels=256, kernel_size=(1, 4), stride=1),  # 16
             nn.BatchNorm2d(num_features=256),
-            nn.ReLU(),
-            nn.MaxPool3d(kernel_size=(1,3,3), stride=(4,2,1)),
-            nn.Dropout(0.5),
-            nn.Conv2d(64, 256, kernel_size=(4,1), stride=1),
-            nn.BatchNorm2d(num_features=256),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Conv2d(256, class_num, kernel_size=(1,13), stride=1),
+            nn.ReLU(),  # 18
+            nn.Dropout(dropout_rate),
+            nn.Conv2d(in_channels=256, out_channels=class_num, kernel_size=(13, 1), stride=1),  # 20
             nn.BatchNorm2d(num_features=class_num),
-            nn.ReLU(), # torch.Size([1, 30, 1, 74])
-            Softmax(),
-            Reshape()
+            nn.ReLU(),  # *** 22 ***
         )
-        self.lprnet.apply(init_weights)
+        self.container = nn.Sequential(
+            nn.Conv2d(in_channels=448 + self.class_num, out_channels=self.class_num, kernel_size=(1, 1), stride=(1, 1))
+        )
 
     def forward(self, x):
-        return self.lprnet(x)
+        keep_features = list()
+        for i, layer in enumerate(self.backbone.children()):
+            x = layer(x)
+            if i in [2, 6, 13, 22]:  # [2, 4, 8, 11, 22]
+                keep_features.append(x)
+
+        global_context = list()
+        for i, f in enumerate(keep_features):
+            if i in [0, 1]:
+                f = nn.AvgPool2d(kernel_size=5, stride=5)(f)
+            if i in [2]:
+                f = nn.AvgPool2d(kernel_size=(4, 10), stride=(4, 2))(f)
+            f_pow = torch.pow(f, 2)
+            f_mean = torch.mean(f_pow)
+            f = torch.div(f, f_mean)
+            global_context.append(f)
+
+        x = torch.cat(global_context, 1)
+        x = self.container(x)
+        logits = torch.mean(x, dim=2)
+
+        return logits
 
 train_dir = '/home/vadim/Documents/CCPD2019/ccpd_train/'
 valid_dir = '/home/vadim/Documents/CCPD2019/ccpd_validation/'
+#pt setul mic
+# train_dir = '/home/vadim/Desktop/diploma_project_code/v2_tfDetect_lprnet_ctc/plate_and_nr_dataset/train/'
+# valid_dir = '/home/vadim/Desktop/diploma_project_code/v2_tfDetect_lprnet_ctc/plate_and_nr_dataset/validation/'
 train_set = BatchGenerator(train_dir, 94, 24, alphabet, max_plate_len, 32, shuffle=True)
 valid_set = BatchGenerator(valid_dir, 94, 24, alphabet, max_plate_len, 32)
 
-T = 74  # input sequence length
+T = 18  # input sequence length
 
-lprnet = LPRNet(class_num=len(alphabet))
+lprnet = LPRNet(class_num=len(alphabet), lpr_max_len=max_plate_len)
+
+def adjust_learning_rate(optimizer, cur_epoch, base_lr, lr_schedule):
+    """
+    Sets the learning rate
+    """
+    lr = 0
+    for i, e in enumerate(lr_schedule):
+        if cur_epoch < e:
+            lr = base_lr * (0.1 ** i)
+            break
+    if lr == 0:
+        lr = base_lr
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+    return lr
+
+def xavier(param):
+    nn.init.xavier_uniform(param)
+
+def weights_init(m):
+    for key in m.state_dict():
+        if key.split('.')[-1] == 'weight':
+            if 'conv' in key:
+                nn.init.kaiming_normal_(m.state_dict()[key], mode='fan_out')
+            if 'bn' in key:
+                m.state_dict()[key][...] = xavier(1)
+        elif key.split('.')[-1] == 'bias':
+            m.state_dict()[key][...] = 0.01
 
 def train_one_epoch(model, log_interval, epoch, loader, optimizer, device):
     model.to(device)
@@ -282,16 +315,18 @@ def train_one_epoch(model, log_interval, epoch, loader, optimizer, device):
     for i in range(loader.nr_sampels//loader.batch_size+1):
         X_data, Y_data, X_data_len, Y_data_len = loader.next_batch()
         N_count += X_data.size(0)
+        adjust_learning_rate(optimizer, epoch, 0.1, [4, 8, 12, 14, 16])
 
-        X_data = model(X_data)
+        logits = model(X_data)
+        log_probs = logits.permute(2, 0, 1)  # for ctc loss: T x N x C
+        log_probs = log_probs.log_softmax(2).requires_grad_()
         optimizer.zero_grad()
-        loss = ctc_loss(X_data, Y_data, X_data_len, Y_data_len)
+        loss = ctc_loss(log_probs, Y_data, X_data_len, Y_data_len)
         if loss.item() == np.inf:
             continue
         losses.append(loss.item())
         loss.backward()
         optimizer.step()
-        scheduler.step()
 
         if (i+1) % log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss {:.6f}'.format(
@@ -305,7 +340,7 @@ def train_one_epoch(model, log_interval, epoch, loader, optimizer, device):
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'loss': np.mean(losses)
-    }, "lprnet_chckpnt.tar")
+    }, "lprnet_chckpnt_epoch_{}.tar".format(epoch+1))
     print("lprnet_chckpnt_epoch_{}.tar successfully saved".format(epoch+1))
 
     return np.mean(losses)
@@ -319,8 +354,10 @@ def validation_one_epoch(model, epoch, loader, device):
         for i in range(loader.nr_sampels // loader.batch_size + 1):
             X_data, Y_data, X_data_len, Y_data_len = loader.next_batch()
 
-            X_data = model(X_data)
-            loss = ctc_loss(X_data, Y_data, X_data_len, Y_data_len)
+            logits = model(X_data)
+            log_probs = logits.permute(2, 0, 1)  # for ctc loss: T x N x C
+            log_probs = log_probs.log_softmax(2).requires_grad_()
+            loss = ctc_loss(log_probs, Y_data, X_data_len, Y_data_len)
             if loss.item() == np.inf:
                 continue
             losses.append(loss.item())
@@ -328,9 +365,9 @@ def validation_one_epoch(model, epoch, loader, device):
     print("Validation epoch:", epoch+1, ", loss:", np.mean(losses))
     return np.mean(losses)
 
-optimizer = optim.Adam(lprnet.parameters())
+optimizer = optim.RMSprop(lprnet.parameters(), lr=0.001, alpha=0.9, eps=1e-08,
+                    momentum=0.9, weight_decay=2e-5)
 ctc_loss = nn.CTCLoss(blank=alphabet.index('-'), reduction='mean')
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=100000, gamma=0.1)
 
 train_losses = []
 validation_losses = []
@@ -345,13 +382,15 @@ def train(epochs):
     np.save('validation_losses.npy', validation_losses)
     print("Train and Validation losses were saved.")
 
-def load_checkpoint():
-    checkpoint = torch.load("/home/vadim/Downloads/lprnet_chckpnt.tar", map_location=torch.device('cpu'))
-    lprnet.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    epoch = checkpoint['epoch']
-    loss = checkpoint['loss']
-    print("epoch nr ={}, last loss = {}".format(epoch, loss))
+def load_or_init(v=True):
+    if v is True:
+        lprnet.backbone.apply(weights_init)
+        lprnet.container.apply(weights_init)
+        print("initialized net weights successful!")
+    else:
+        wghts = torch.load('Final_LPRNet_model_by_sirius.pth', map_location=torch.device('cpu'))
+        lprnet.load_state_dict(wghts)
+        print('custom pretrained model was loaded')
     lprnet.eval()
 
 # TESTING
@@ -418,3 +457,6 @@ def test_validation_dataset():
     for i in range(10):
         errs.append(test())
     print(np.mean(errs))
+
+#pentru a testa mai intai apelez load_or_init(False) pt a incarca reteaua
+#apot test_validation_dataset() pt a vedea rezultat
